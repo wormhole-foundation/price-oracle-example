@@ -13,7 +13,11 @@ import {
     pollForEvent,
     getCoreBridgeAddress,
 } from './utils.js';
-import { getExecutorQuote, calculateTotalCost } from './executor.js';
+import {
+    getExecutorQuote,
+    getMultiChainQuotes,
+    calculateTotalCost,
+} from './executor.js';
 import {
     createRelayInstructions,
     DEFAULT_GAS_LIMIT,
@@ -59,18 +63,19 @@ function getPriceFeedContract(
 
 /**
  * Send a cross-chain price update using the Wormhole Executor
+ * Supports sending to multiple destination chains in a single transaction
  */
 export async function sendPriceUpdate(
     fromConfig: ChainConfig,
-    toConfig: ChainConfig,
+    toConfigs: ChainConfig[],
     symbols: string[],
     prices: bigint[]
 ): Promise<SendPriceUpdateResult> {
-    console.log(`\n${'='.repeat(60)}`);
     console.log(
-        `Sending price update: ${fromConfig.chain} -> ${toConfig.chain}`
+        `\n📤 Sending ${symbols.join(', ')} from ${
+            fromConfig.chain
+        } to ${toConfigs.map((c) => c.chain).join(', ')}`
     );
-    console.log(`${'='.repeat(60)}`);
 
     const abi = await loadSenderAbi();
     const { provider, wallet } = await getProviderAndWallet(fromConfig);
@@ -80,47 +85,19 @@ export async function sendPriceUpdate(
         abi
     );
 
-    console.log(`\nSender: ${wallet.address}`);
-    console.log(`Source contract: ${fromConfig.priceFeedAddress}`);
-    console.log(`Target contract: ${toConfig.priceFeedAddress}`);
-    console.log(`Symbols: ${symbols.join(', ')}`);
-    console.log(
-        `Prices: ${prices.map((p) => ethers.formatUnits(p, 8)).join(', ')}`
-    );
-
-    // Step 1: Set gas limit for execution on target chain
-    // PriceFeed requires more gas for array processing
-    const gasLimit = DEFAULT_GAS_LIMIT * 2n; // Double the default for array processing
-
-    // Step 2: Create relay instructions
-    console.log('\n📋 Creating relay instructions...');
+    const gasLimit = DEFAULT_GAS_LIMIT * 2n;
     const msgValue = DEFAULT_MSG_VALUE;
     const relayInstructions = createRelayInstructions(gasLimit, msgValue);
+    const quotes = await getMultiChainQuotes(
+        fromConfig.wormholeChainId,
+        toConfigs.map((config) => ({
+            chainId: config.wormholeChainId,
+            relayInstructions,
+        }))
+    );
 
-    console.log(`  Gas limit: ${gasLimit}`);
-    console.log(`  Msg value: ${msgValue}`);
-    console.log(`  Relay instructions: ${relayInstructions}`);
-
-    // Step 3: Get Executor quote with the relay instructions
-    console.log('\n💰 Getting Executor quote...');
-    const quote = await getExecutorQuote({
-        srcChain: fromConfig.wormholeChainId,
-        dstChain: toConfig.wormholeChainId,
-        relayInstructions,
-    });
-
-    console.log(`✓ Quote received!`);
-    if (quote.estimatedCost) {
-        console.log(
-            `  Estimated executor cost: ${ethers.formatEther(
-                quote.estimatedCost
-            )} ETH`
-        );
-    }
-
-    // Step 4: Calculate total cost (Wormhole message fee + Executor cost)
+    // Step 4: Calculate total cost (Wormhole message fee + Executor costs)
     const coreBridgeAddress = await getCoreBridgeAddress(fromConfig);
-
     const coreBridge = new ethers.Contract(
         coreBridgeAddress,
         ['function messageFee() view returns (uint256)'],
@@ -128,45 +105,32 @@ export async function sendPriceUpdate(
     );
 
     const messageFee = await coreBridge.messageFee();
-    const totalCost = calculateTotalCost(messageFee, quote.estimatedCost);
-
-    console.log(`\n💵 Cost breakdown:`);
-    console.log(
-        `  Wormhole message fee: ${ethers.formatEther(messageFee)} ETH`
-    );
-    if (quote.estimatedCost) {
-        console.log(
-            `  Executor estimated cost: ${ethers.formatEther(
-                quote.estimatedCost
-            )} ETH`
-        );
+    let totalExecutorCost = 0n;
+    for (const quote of quotes) {
+        totalExecutorCost += quote.estimatedCost;
     }
-    console.log(`  Total cost: ${ethers.formatEther(totalCost)} ETH`);
+    const totalCost = calculateTotalCost(messageFee, totalExecutorCost);
 
-    // Check balance
+    console.log(`💰 Total cost: ${ethers.formatEther(totalCost)} ETH`);
+
     const balance = await provider.getBalance(wallet.address);
-    console.log(`Wallet balance: ${ethers.formatEther(balance)} ETH`);
-
     if (balance < totalCost) {
         throw new Error('Insufficient balance for transaction');
     }
 
-    // Step 5: Send price update with the Executor
-    console.log('\n📤 Sending price update with Executor relay...');
+    const targetChainParams = toConfigs.map((config, index) => ({
+        chainId: config.wormholeChainId,
+        gasLimit: gasLimit,
+        totalCost: quotes[index].estimatedCost,
+        signedQuote: quotes[index].signedQuote,
+    }));
 
-    const tx = await contract.updatePrices(
-        symbols,
-        prices,
-        toConfig.wormholeChainId,
-        gasLimit,
-        totalCost,
-        quote.signedQuote,
-        { value: totalCost }
-    );
+    const tx = await contract.updatePrices(symbols, prices, targetChainParams, {
+        value: totalCost,
+    });
 
-    const receipt = await waitForTx(tx, 'Sending price update transaction');
+    const receipt = await waitForTx(tx, 'Price update');
 
-    // Parse PricesUpdated event
     const sentEvent = receipt?.logs
         .map((log) => {
             try {
@@ -181,10 +145,7 @@ export async function sendPriceUpdate(
         .find((event) => event?.name === 'PricesUpdated');
 
     if (sentEvent) {
-        console.log('\n📨 PricesUpdated Event:');
-        console.log(`  Count: ${sentEvent.args.count}`);
-        console.log(`  Target Chain: ${sentEvent.args.targetChain}`);
-        console.log(`  Sequence: ${sentEvent.args.sequence}`);
+        console.log(`✅ Sent (sequence: ${sentEvent.args.sequence})`);
     }
 
     return { receipt, sequence: sentEvent?.args.sequence };
@@ -197,9 +158,7 @@ export async function waitForPriceUpdateReceipt(
     chainConfig: ChainConfig,
     expectedSymbols: string[]
 ): Promise<boolean> {
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`Waiting for price updates on ${chainConfig.chain}`);
-    console.log(`${'='.repeat(60)}`);
+    console.log(`⏳ Waiting for ${chainConfig.chain}...`);
 
     const abi = await loadReceiverAbi();
     const { wallet } = await getProviderAndWallet(chainConfig);
@@ -209,30 +168,18 @@ export async function waitForPriceUpdateReceipt(
         abi
     );
 
-    // Create filter for PricesReceived event
     const filter = contract.filters.PricesReceived();
-
-    // Poll for event
     const event = await pollForEvent(
         contract,
         'PricesReceived',
         filter,
-        120000 // 2 minute timeout
+        120000
     );
 
     if (event) {
-        const parsedEvent = contract.interface.parseLog({
-            topics: event.topics as string[],
-            data: event.data,
-        });
-
-        console.log('\n✅ PricesReceived Event:');
-        console.log(`  Count: ${parsedEvent?.args.count}`);
-        console.log(`  Sender Chain: ${parsedEvent?.args.senderChain}`);
-        console.log(`  Sender: ${parsedEvent?.args.sender}`);
-        console.log(`  Block: ${event.blockNumber}`);
-        console.log(`  Transaction: ${event.transactionHash}`);
-
+        console.log(
+            `✅ ${chainConfig.chain} received (tx: ${event.transactionHash})`
+        );
         return true;
     }
 

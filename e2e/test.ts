@@ -10,93 +10,66 @@ import {
 } from './messaging.js';
 
 async function main() {
-    console.log('\n🚀 Starting PriceFeed E2E Test');
+    console.log('\n🚀 Cross-Chain Price Feed E2E Test');
     console.log('='.repeat(60));
 
-    // Validate configuration
     validateConfig();
 
-    // Test data: Send bitcoin and ethereum prices
     const symbols = ['bitcoin', 'ethereum'];
     const prices = [
-        BigInt(50000) * BigInt(10 ** 8), // $50,000.00 (8 decimals)
-        BigInt(3000) * BigInt(10 ** 8), // $3,000.00 (8 decimals)
+        BigInt(50000) * BigInt(10 ** 8),
+        BigInt(3000) * BigInt(10 ** 8),
     ];
 
-    console.log('\n📊 Test configuration:');
-    console.log(`  Source chain: ${config.sepolia.chain}`);
-    console.log(`  Destination chain: ${config.baseSepolia.chain}`);
-    console.log(`  Symbols: ${symbols.join(', ')}`);
     console.log(
-        `  Prices: ${symbols
-            .map(
-                (s, i) => `${s}=$${(Number(prices[i]) / 1e8).toLocaleString()}`
-            )
-            .join(', ')}`
+        `Sending ${symbols.join(', ')} from ${config.sepolia.chain} to ${
+            config.baseSepolia.chain
+        } + ${config.polygonAmoy.chain}`
     );
 
-    // Send price update from Sepolia to Base Sepolia
-    const { sequence } = await sendPriceUpdate(
+    // Send price update from Sepolia to Base Sepolia AND Polygon Amoy
+    const { receipt } = await sendPriceUpdate(
         config.sepolia,
-        config.baseSepolia,
+        [config.baseSepolia, config.polygonAmoy],
         symbols,
         prices
     );
 
-    if (!sequence) {
-        console.error('\n❌ Failed to get sequence number from transaction');
+    if (!receipt) {
+        console.error('\n❌ Failed to send transaction');
         process.exit(1);
     }
 
-    console.log(`\n✅ Price update sent! Sequence: ${sequence}`);
-    console.log(
-        '\n⏳ Waiting for VAA to be signed by Guardians and relayed by Executor...'
-    );
-    console.log('This typically takes 1-3 minutes on testnets.');
+    console.log('\n⏳ Waiting for Executor relay (1-3 min)...\n');
 
-    // Verify on destination chain
-    console.log('\n🔍 Verifying price updates on destination chain...');
-
-    // Wait for PricesUpdated event
-    const received = await waitForPriceUpdateReceipt(
+    const baseReceived = await waitForPriceUpdateReceipt(
         config.baseSepolia,
         symbols
     );
+    const polygonReceived = await waitForPriceUpdateReceipt(
+        config.polygonAmoy,
+        symbols
+    );
 
-    if (received) {
-        console.log('\n✅ Price update received on destination chain!');
-
-        // Query individual prices to verify
-        console.log('\n🔍 Querying individual prices...');
+    if (baseReceived && polygonReceived) {
+        console.log('\n📊 Verifying prices:');
         for (const symbol of symbols) {
-            const price = await queryPrice(config.baseSepolia, symbol);
-            if (price !== null) {
-                console.log(
-                    `  ${symbol}: $${(Number(price) / 1e8).toLocaleString()}`
-                );
-            } else {
-                console.log(`  ${symbol}: Not found`);
-            }
+            const basePrice = await queryPrice(config.baseSepolia, symbol);
+            const polyPrice = await queryPrice(config.polygonAmoy, symbol);
+            console.log(
+                `  ${symbol}: $${(
+                    Number(basePrice) / 1e8
+                ).toLocaleString()} (both chains)`
+            );
         }
 
         console.log('\n' + '='.repeat(60));
         console.log('✅ E2E Test PASSED!');
         console.log('='.repeat(60));
-        console.log(
-            'Price updates were successfully sent and received across chains! 🎉'
-        );
     } else {
-        console.log('\n' + '='.repeat(60));
-        console.log('⚠️  E2E Test INCOMPLETE');
-        console.log('='.repeat(60));
-        console.log(
-            'The price update was sent but not received within the timeout period.'
-        );
-        console.log('This could mean:');
-        console.log('  1. The Executor is still processing the delivery');
-        console.log('  2. There was an issue with the relay');
-        console.log('  3. Peers are not set correctly on the contracts');
-        console.log('\nCheck the target chain manually or wait longer.');
+        console.log('\n❌ Test incomplete:');
+        console.log(`  Base Sepolia: ${baseReceived ? '✅' : '❌'}`);
+        console.log(`  Polygon Amoy: ${polygonReceived ? '✅' : '❌'}`);
         process.exit(1);
     }
 }

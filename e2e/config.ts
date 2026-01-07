@@ -34,14 +34,24 @@ export const config = {
         priceFeedAddress: process.env.PRICE_FEED_BASE_SEPOLIA!,
         wormholeChainId: toChainId('BaseSepolia'),
     } as ChainConfig,
+    polygonAmoy: {
+        chain: 'PolygonSepolia' as Chain, // Polygon Amoy uses PolygonSepolia in SDK
+        network: 'Testnet' as Network,
+        rpcUrl: process.env.POLYGON_AMOY_RPC_URL, // Optional - SDK has defaults
+        privateKey: process.env.PRIVATE_KEY_POLYGON_AMOY!,
+        priceFeedAddress: process.env.PRICE_FEED_POLYGON_AMOY!,
+        wormholeChainId: toChainId('PolygonSepolia'),
+    } as ChainConfig,
 };
 
 export function validateConfig() {
     const requiredVars = [
         'PRIVATE_KEY_SEPOLIA',
         'PRIVATE_KEY_BASE_SEPOLIA',
+        'PRIVATE_KEY_POLYGON_AMOY',
         'PRICE_FEED_SEPOLIA',
         'PRICE_FEED_BASE_SEPOLIA',
+        'PRICE_FEED_POLYGON_AMOY',
     ];
 
     const missing = requiredVars.filter((v) => !process.env[v]);

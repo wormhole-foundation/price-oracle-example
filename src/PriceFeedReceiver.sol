@@ -4,8 +4,9 @@ pragma solidity ^0.8.22;
 import {ExecutorReceive} from "wormhole-solidity-sdk/Executor/Integration.sol";
 import {SequenceReplayProtectionLib} from "wormhole-solidity-sdk/libraries/ReplayProtection.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
-contract PriceFeedReceiver is ExecutorReceive, AccessControl {
+contract PriceFeedReceiver is ExecutorReceive, AccessControl, Pausable {
     using SequenceReplayProtectionLib for *;
 
     bytes32 public constant PEER_ADMIN_ROLE = keccak256("PEER_ADMIN_ROLE");
@@ -32,6 +33,14 @@ contract PriceFeedReceiver is ExecutorReceive, AccessControl {
         peers[chainId] = peerAddress;
     }
 
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
+    }
+
     function _replayProtect(
         uint16 emitterChainId,
         bytes32 emitterAddress,
@@ -56,6 +65,7 @@ contract PriceFeedReceiver is ExecutorReceive, AccessControl {
     )
         internal
         override
+        whenNotPaused
     {
         if (msg.value > 0) {
             revert NoValueAllowed();

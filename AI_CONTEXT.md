@@ -4,44 +4,104 @@ This document provides complete context for AI agents working with this codebase
 
 ## Project Overview
 
-Cross-chain price feed oracle using Wormhole Executor architecture. Sends token prices from Sepolia to Base Sepolia.
+Cross-chain price feed oracle using Wormhole Executor architecture. **Broadcasts token prices from Sepolia to multiple destination chains (Base Sepolia, Polygon Amoy) in a single transaction.**
+
+## Key Features
+
+-   **Multi-Chain Broadcasting** - Send same price payload to 2+ chains simultaneously
+-   **TargetChainParams Structure** - Array of targets with individual executor quotes
+-   **Gas Optimization** - Encode payload once, send to N chains
+-   **Atomic Multi-Chain Updates** - All chains receive identical price data
 
 ## Key Files
 
 ### Contracts
 
--   `src/PriceFeedSender.sol` - Sender contract (Sepolia), extends ExecutorSend
--   `src/PriceFeedReceiver.sol` - Receiver contract (Base Sepolia), extends ExecutorReceive
--   `script/ChainIdHelper.sol` - Utility library for EVM ↔ Wormhole chain ID conversion
+-   `src/PriceFeedSender.sol` - Sender contract (Sepolia), extends ExecutorSend, **supports multi-chain targets**
+-   `src/PriceFeedReceiver.sol` - Receiver contract (Base Sepolia, Polygon Amoy), extends ExecutorReceive
+-   `script/utils/ChainIdHelper.sol` - Utility library for EVM ↔ Wormhole chain ID conversion (40+ chains)
 
 ### Tests
 
--   `test/PriceFeed.t.sol` - 16 comprehensive tests with fork testing and VAA crafting
--   `test/ChainIdHelper.t.sol` - 4 tests for chain ID utility
+-   `test/PriceFeed.t.sol` - 23 comprehensive tests with fork testing, VAA crafting, and multi-chain scenarios
+-   `test/utils/ChainIdHelper.t.sol` - 4 tests for chain ID utility
+
+### E2E Tests
+
+-   `e2e/test.ts` - E2E test that sends prices to Base Sepolia AND Polygon Amoy
+-   `e2e/config.ts` - Configuration for Sepolia, Base Sepolia, Polygon Amoy
+-   `e2e/executor.ts` - `getMultiChainQuotes()` for batch quote requests
+-   `e2e/messaging.ts` - `sendPriceUpdate()` accepts array of target chains
 
 ### Deployment
 
--   `script/DeployPriceFeedSender.s.sol` - Deploy sender to Sepolia with verification
--   `script/DeployPriceFeedReceiver.s.sol` - Deploy receiver to Base Sepolia with verification
--   `script/SetupPeers.s.sol` - Configure peer relationships
+-   `script/DeployPriceFeedSender.s.sol` - Deploy sender to Sepolia (supports Sepolia, Base Sepolia, Polygon Amoy)
+-   `script/DeployPriceFeedReceiver.s.sol` - Deploy receiver to any chain (Base Sepolia, Polygon Amoy, etc.)
+-   `script/SetupPeers.s.sol` - Configure peer relationships (updated for Polygon Amoy)
 
-## Architecture Decisions
+## Important Notes
+
+### Peer Address Format (CRITICAL)
+
+When setting peers, use **Wormhole Universal Address format** (left-padding):
+
+```solidity
+// CORRECT - zeros on the LEFT
+bytes32 peer = bytes32(uint256(uint160(address)));
+// Result: 0x000000000000000000000000bbd81bcdc0bb81f2f5e0e2fa1005b24a1d1a18af
+
+// WRONG - zeros on the RIGHT (causes "Hex size exceeds padding" error)
+bytes32 peer = bytes32(uint256(uint160(address)) << 96);
+// Result: 0xbbd81bcdc0bb81f2f5e0e2fa1005b24a1d1a18af000000000000000000000000
+```
+
+The Executor uses `fromUniversalAddress()` which expects first 12 bytes to be zero.
+
+### Why Multi-Chain Broadcasting?
+
+1. **Efficiency** - One transaction sends to N chains instead of N transactions
+2. **Atomicity** - All chains receive the same data at the same time
+3. **Cost Savings** - Single payload encoding, single message fee from CoreBridge
+4. **Consistency** - Guaranteed identical price data across all destination chains
+
+### Why TargetChainParams Array?
+
+Replaced single-chain parameters with array of structs:
+
+```solidity
+struct TargetChainParams {
+    uint16 chainId;        // Wormhole chain ID of destination
+    uint128 gasLimit;      // Gas limit for execution on that chain
+    uint256 totalCost;     // Executor cost for that chain
+    bytes signedQuote;     // Signed quote from executor for that chain
+}
+```
+
+Benefits:
+
+-   Flexible: 1 to N destination chains
+-   Executor quotes per chain (different gas costs)
+-   Clear cost attribution
+-   Future-proof for additional parameters
 
 ### Why Separate Sender/Receiver?
 
 1. **Gas Optimization** - Smaller contract size per chain
 2. **Clear Separation** - Sender has PRICE_FEED_ROLE, receiver validates peers
 3. **Security** - Each contract only has the permissions it needs
+4. **Scalability** - Deploy 1 sender, N receivers across chains
 
-### Why Array-Based Only?
+### Why Array-Based Prices?
 
--   Simplified from dual format (single + batch) to array-only
 -   For single price: use 1-element array
+-   For batch: use N-element arrays
 -   Benefits: simpler code, no backward compatibility logic, cleaner events
 
-### Why Sepolia and Base Sepolia?
+### Supported Testnets
 
-Both are established Ethereum testnets with full Wormhole support. Base Sepolia provides L2 scalability for the receiver while Sepolia serves as the L1 sender.
+-   **Sepolia** (Sender) - Ethereum L1 testnet with full Wormhole support
+-   **Base Sepolia** (Receiver) - L2 scalability, low gas costs
+-   **Polygon Amoy** (Receiver) - High throughput, multi-chain reach
 
 ## Important Constants
 
@@ -49,6 +109,7 @@ Both are established Ethereum testnets with full Wormhole support. Base Sepolia 
 
 -   Sepolia: `10002` (EVM: `11155111`)
 -   Base Sepolia: `10004` (EVM: `84532`)
+-   Polygon Amoy: `10007` (EVM: `80002`)
 
 ### Contract Addresses
 
@@ -62,19 +123,28 @@ Both are established Ethereum testnets with full Wormhole support. Base Sepolia 
 -   CoreBridge: `0x79A1027a6A159502049F10906D333EC57E95F083`
 -   Executor: `0x51B47D493CBA7aB97e3F8F163D6Ce07592CE4482`
 
+**Polygon Amoy:**
+
+-   CoreBridge: `0x6b9C8671cdDC8dEab9c719bB87cBd3e782bA6a35`
+-   Executor: `0x7056721C33De437f0997F67BC87521cA86b721d3`
+
 ## Function Signatures
 
-### PriceFeedSender
+### PriceFeedSender (Multi-Chain)
 
 ```solidity
+struct TargetChainParams {
+    uint16 chainId;
+    uint128 gasLimit;
+    uint256 totalCost;
+    bytes signedQuote;
+}
+
 function updatePrices(
     string[] calldata tokenNames,
     uint256[] calldata pricesArray,
-    uint16 targetChain,
-    uint128 gasLimit,
-    uint256 totalCost,
-    bytes calldata signedQuote
-) external payable onlyRole(PRICE_FEED_ROLE) returns (uint64 sequence)
+    TargetChainParams[] calldata targets  // NEW: Array of targets!
+) external payable onlyRole(PRICE_FEED_ROLE) returns (uint64[] memory sequences)
 
 function setPeer(uint16 chainId, bytes32 peerAddress) external onlyRole(PEER_ADMIN_ROLE)
 
@@ -96,8 +166,8 @@ mapping(string => uint256) public prices;
 
 **Sender:**
 
--   `PricesUpdated(uint256 count, uint16 targetChain, uint64 sequence)`
--   `LocalPricesStored(string[] tokenNames, uint256[] prices)`
+-   `PricesUpdated(uint256 count, uint16 targetChain, uint64 sequence)` - Emitted once per target chain
+-   `LocalPricesStored(string[] tokenNames, uint256[] prices)` - Emitted once before broadcasting
 
 **Receiver:**
 
@@ -142,11 +212,12 @@ bytes memory signedVaa = WormholeOverride.craftVaa(
 
 ## Deployment Flow
 
-1. Deploy PriceFeedSender on Sepolia
-2. Deploy PriceFeedReceiver on Base Sepolia
-3. Set receiver as peer on sender: `setPeer(10004, receiverAddress)`
-4. Set sender as peer on receiver: `setPeer(10002, senderAddress)`
-5. Grant PRICE_FEED_ROLE to authorized feeders
+1. Deploy PriceFeedSender on Sepolia using `DeployPriceFeedSender.s.sol`
+2. Deploy PriceFeedReceiver on Base Sepolia/Polygon Amoy using `DeployPriceFeedReceiver.s.sol`
+3. Setup peer relationships using `SetupPeers.s.sol` (runs on each chain)
+4. Grant PRICE_FEED_ROLE to authorized feeders
+
+**Note**: SetupPeers script automatically uses SDK's `toUniversalAddress()` for correct format.
 
 ## Security Considerations
 
@@ -185,21 +256,19 @@ forge verify-contract \
 cast call <CONTRACT_ADDRESS> "prices(string)" "bitcoin" --rpc-url <RPC>
 ```
 
-### Update Price
+### Setup Peers
 
 ```bash
-cast send <SENDER_ADDRESS> \
-  "updatePrices(string[],uint256[],uint16,uint128,uint256,bytes)" \
-  '["bitcoin"]' '[4500000000000]' 48 500000 0.01ether '0x' \
-  --value 0.01ether --rpc-url https://ethereum-sepolia.publicnode.com \
-  --private-key $PRIVATE_KEY_SEPOLIA
+# Run SetupPeers script on each chain
+forge script script/SetupPeers.s.sol:SetupPeersScript \
+  --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
 ```
 
 ## Known Issues/Limitations
 
-1. **Monad Verification** - Testnet may not have block explorer for contract verification
-2. **Executor Fees** - Must get signedQuote from Executor API off-chain (simplified with '0x' in examples)
-3. **Fork Testing** - Tests still use Base Sepolia fork (not Monad) due to RPC availability
+1. **Peer Format** - Must use correct Universal Address format (see Important Notes above)
+2. **Executor Quotes** - Must fetch from Executor API (not hardcoded)
+3. **Gas Estimation** - May need adjustment per chain for complex operations
 
 ## Dependencies
 

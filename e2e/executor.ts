@@ -52,16 +52,7 @@ export async function getExecutorQuote(
 ): Promise<ExecutorQuote> {
     const apiUrl = await getExecutorApiUrl(network);
 
-    console.log('📊 Requesting Executor quote using SDK...');
-    console.log('  API:', apiUrl);
-    console.log('  Source chain:', params.srcChain);
-    console.log('  Destination chain:', params.dstChain);
-    if (params.relayInstructions) {
-        console.log('  Relay instructions:', params.relayInstructions);
-    }
-
     try {
-        // Use SDK's fetchQuote function
         const sdkDefs = (await import(
             '@wormhole-foundation/sdk-definitions'
         )) as any;
@@ -72,25 +63,41 @@ export async function getExecutorQuote(
             params.relayInstructions
         );
 
-        // The API returns both signedQuote and estimatedCost
-        const estimatedCost = quote.estimatedCost;
-
-        console.log('\n💰 Quote received:');
-        console.log(
-            '  Signed quote:',
-            quote.signedQuote.substring(0, 20) + '...'
-        );
-        console.log('  Estimated cost:', estimatedCost, 'wei');
-
+        const estimatedCost = BigInt(quote.estimatedCost);
         return {
             signedQuote: quote.signedQuote,
             estimatedCost: estimatedCost,
         };
     } catch (error: any) {
-        console.error('❌ Error getting Executor quote:', error);
-        console.error('   Error details:', error.message, error.cause);
+        console.error('❌ Error getting Executor quote:', error.message);
         throw new Error(`Failed to get Executor quote: ${error.message}`);
     }
+}
+
+/**
+ * Get quotes for multiple destination chains
+ * Useful for multi-chain price updates
+ */
+export async function getMultiChainQuotes(
+    srcChain: number,
+    dstChains: Array<{ chainId: number; relayInstructions: string }>,
+    network: Network = 'Testnet'
+): Promise<ExecutorQuote[]> {
+    const quotes: ExecutorQuote[] = [];
+
+    for (const dst of dstChains) {
+        const quote = await getExecutorQuote(
+            {
+                srcChain,
+                dstChain: dst.chainId,
+                relayInstructions: dst.relayInstructions,
+            },
+            network
+        );
+        quotes.push(quote);
+    }
+
+    return quotes;
 }
 
 /**
@@ -198,10 +205,11 @@ export async function pollForExecutorStatus(
  */
 export function calculateTotalCost(
     wormholeMessageFee: bigint,
-    executorEstimatedCost?: string
+    executorEstimatedCost: bigint | string = 0n
 ): bigint {
-    const executorCost = executorEstimatedCost
-        ? BigInt(executorEstimatedCost)
-        : 0n;
+    const executorCost =
+        typeof executorEstimatedCost === 'string'
+            ? BigInt(executorEstimatedCost)
+            : executorEstimatedCost;
     return wormholeMessageFee + executorCost;
 }

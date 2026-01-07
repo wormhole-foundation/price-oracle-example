@@ -21,6 +21,10 @@ contract DeployPriceFeedReceiver is Script {
         else if (chainId == 11155111) {
             coreBridge = 0x4a8bc80Ed5a4067f1CCf107057b8270E0cC11A78;
         }
+        // Polygon Amoy (EVM chainId: 80002, Wormhole chainId: 10007)
+        else if (chainId == 80002) {
+            coreBridge = 0x6b9C8671cdDC8dEab9c719bB87cBd3e782bA6a35;
+        }
         // Allow env override for other chains
         else {
             coreBridge = vm.envAddress("CORE_BRIDGE_ADDRESS");

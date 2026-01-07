@@ -5,6 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {PriceFeedSender} from "../src/PriceFeedSender.sol";
 import {PriceFeedReceiver} from "../src/PriceFeedReceiver.sol";
 import {ChainIdHelper} from "./utils/ChainIdHelper.sol";
+import {toUniversalAddress} from "wormhole-solidity-sdk/Utils.sol";
 
 contract SetupPeersScript is Script {
     function setUp() public {}
@@ -16,7 +17,7 @@ contract SetupPeersScript is Script {
         uint256 remoteEvmChainId;
         uint16 remoteChainId;
 
-        // Sepolia (chainId: 11155111) -> setup Base Sepolia receiver as peer
+        // Sepolia (chainId: 11155111) -> setup Base Sepolia and Polygon Amoy receivers as peers
         if (chainId == 11155111) {
             localContract = vm.envAddress("PRICE_FEED_SEPOLIA");
             remoteContract = vm.envAddress("PRICE_FEED_BASE_SEPOLIA");
@@ -25,6 +26,12 @@ contract SetupPeersScript is Script {
         // Base Sepolia (chainId: 84532) -> setup Sepolia sender as peer
         else if (chainId == 84532) {
             localContract = vm.envAddress("PRICE_FEED_BASE_SEPOLIA");
+            remoteContract = vm.envAddress("PRICE_FEED_SEPOLIA");
+            remoteEvmChainId = 11155111; // Sepolia EVM chain ID
+        }
+        // Polygon Amoy (chainId: 80002) -> setup Sepolia sender as peer
+        else if (chainId == 80002) {
+            localContract = vm.envAddress("PRICE_FEED_POLYGON_AMOY");
             remoteContract = vm.envAddress("PRICE_FEED_SEPOLIA");
             remoteEvmChainId = 11155111; // Sepolia EVM chain ID
         } else {
@@ -39,8 +46,8 @@ contract SetupPeersScript is Script {
         console.log("Remote contract:", remoteContract);
         console.log("Remote Wormhole chain ID:", remoteChainId);
 
-        // Convert address to bytes32 (left-padded with zeros)
-        bytes32 peerAddress = bytes32(uint256(uint160(remoteContract)));
+        // Convert address to Wormhole Universal Address format using SDK
+        bytes32 peerAddress = toUniversalAddress(remoteContract);
 
         vm.startBroadcast();
 
@@ -48,8 +55,8 @@ contract SetupPeersScript is Script {
             // Sepolia - setup sender
             PriceFeedSender sender = PriceFeedSender(localContract);
             sender.setPeer(remoteChainId, peerAddress);
-        } else if (chainId == 84532) {
-            // Base Sepolia - setup receiver
+        } else if (chainId == 84532 || chainId == 80002) {
+            // Base Sepolia or Polygon Amoy - setup receiver
             PriceFeedReceiver receiver = PriceFeedReceiver(localContract);
             receiver.setPeer(remoteChainId, peerAddress);
         }
