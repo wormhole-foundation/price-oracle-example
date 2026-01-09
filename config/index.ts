@@ -1,27 +1,28 @@
+/**
+ * Chain configuration for Wormhole cross-chain messaging
+ * Loads environment variables and provides chain configs
+ */
+
 import { config as dotenvConfig } from 'dotenv';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { resolve } from 'path';
 import {
     toChainId,
     type Chain,
     type Network,
 } from '@wormhole-foundation/sdk-base';
-import type { ChainConfig } from './types.js';
+import type { ChainConfig } from './types';
 
-// Get the directory of this file
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Load environment variables from root .env
+dotenvConfig({ path: resolve(process.cwd(), '.env') });
 
-// Load environment variables from e2e/.env
-dotenvConfig({ path: resolve(__dirname, '.env') });
-
-// Use SDK's predefined RPC URLs and contract addresses
-// CoreBridge addresses and chain IDs are available in the SDK's chain context
+/**
+ * Chain configurations for supported testnets
+ */
 export const config = {
     sepolia: {
         chain: 'Sepolia' as Chain,
         network: 'Testnet' as Network,
-        rpcUrl: process.env.SEPOLIA_RPC_URL, // Optional - SDK has defaults
+        rpcUrl: process.env.SEPOLIA_RPC_URL,
         privateKey: process.env.PRIVATE_KEY_SEPOLIA!,
         priceFeedAddress: process.env.PRICE_FEED_SEPOLIA!,
         wormholeChainId: toChainId('Sepolia'),
@@ -29,7 +30,7 @@ export const config = {
     baseSepolia: {
         chain: 'BaseSepolia' as Chain,
         network: 'Testnet' as Network,
-        rpcUrl: process.env.BASE_SEPOLIA_RPC_URL, // Optional - SDK has defaults
+        rpcUrl: process.env.BASE_SEPOLIA_RPC_URL,
         privateKey: process.env.PRIVATE_KEY_BASE_SEPOLIA!,
         priceFeedAddress: process.env.PRICE_FEED_BASE_SEPOLIA!,
         wormholeChainId: toChainId('BaseSepolia'),
@@ -37,13 +38,16 @@ export const config = {
     polygonAmoy: {
         chain: 'PolygonSepolia' as Chain, // Polygon Amoy uses PolygonSepolia in SDK
         network: 'Testnet' as Network,
-        rpcUrl: process.env.POLYGON_AMOY_RPC_URL, // Optional - SDK has defaults
+        rpcUrl: process.env.POLYGON_AMOY_RPC_URL,
         privateKey: process.env.PRIVATE_KEY_POLYGON_AMOY!,
         priceFeedAddress: process.env.PRICE_FEED_POLYGON_AMOY!,
         wormholeChainId: toChainId('PolygonSepolia'),
     } as ChainConfig,
 };
 
+/**
+ * Validate required environment variables are set
+ */
 export function validateConfig() {
     const requiredVars = [
         'PRIVATE_KEY_SEPOLIA',
@@ -63,3 +67,5 @@ export function validateConfig() {
         );
     }
 }
+
+export type { ChainConfig } from './types';

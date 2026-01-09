@@ -1,35 +1,37 @@
 {
-  "name": "hello-executor",
-  "version": "1.0.0",
-  "description": "Demo integration using Wormhole and the Solidity SDK with Executor",
-  "type": "module",
-  "scripts": {
-    "e2e:test": "tsx e2e/test.ts",
-    "test": "forge test",
-    "build": "forge build"
-  },
-  "keywords": [
-    "wormhole",
-    "executor",
-    "cross-chain",
-    "solidity"
-  ],
-  "author": "",
-  "license": "MIT",
-  "dependencies": {
-    "@esbuild/linux-x64": "^0.27.2",
-    "@wormhole-foundation/sdk": "^3.9.0",
-    "@wormhole-foundation/sdk-base": "^3.9.0",
-    "@wormhole-foundation/sdk-definitions": "^3.9.0",
-    "@wormhole-foundation/sdk-evm": "^3.9.0",
-    "dotenv": "^16.4.5",
-    "esbuild": "^0.27.2",
-    "ethers": "^6.13.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.19.3",
-    "ts-node": "^10.9.2",
-    "tsx": "^4.19.0",
-    "typescript": "^5.9.3"
-  }
+    "name": "price-oracle-example",
+    "version": "1.0.0",
+    "description": "Cross-chain price feed oracle using Wormhole Executor",
+    "type": "module",
+    "scripts": {
+        "e2e:test": "tsx e2e/test.ts",
+        "typecheck": "tsc --noEmit",
+        "test": "forge test",
+        "build": "forge build",
+        "build:ts": "tsc"
+    },
+    "keywords": [
+        "wormhole",
+        "executor",
+        "cross-chain",
+        "solidity",
+        "price-feed",
+        "oracle"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "@wormhole-foundation/sdk": "^3.9.0",
+        "@wormhole-foundation/sdk-base": "^3.9.0",
+        "@wormhole-foundation/sdk-definitions": "^3.9.0",
+        "@wormhole-foundation/sdk-evm": "^3.9.0",
+        "dotenv": "^16.4.5",
+        "ethers": "^6.13.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.19.3",
+        "tsx": "^4.19.0",
+        "typescript": "^5.9.3",
+        "vite": "^6.0.0"
+    }
 }

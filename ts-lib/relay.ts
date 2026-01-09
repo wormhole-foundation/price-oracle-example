@@ -3,6 +3,19 @@
  */
 
 /**
+ * Default gas limit for receiving messages on the target chain
+ * Based on successful test runs for simple message delivery:
+ * - VAA verification and replay protection
+ * - String decoding and event emission
+ */
+export const DEFAULT_GAS_LIMIT = 171948n;
+
+/**
+ * Default msg.value for relay instructions (no native token forwarding)
+ */
+export const DEFAULT_MSG_VALUE = 0n;
+
+/**
  * Create relay instructions for the Executor quote request
  *
  * Relay instructions tell the Executor:
@@ -28,16 +41,3 @@ export function createRelayInstructions(
     // Combine: 0x + version (1 byte) + gasLimit (16 bytes) + msgValue (16 bytes)
     return '0x' + version + gasLimitHex + msgValueHex;
 }
-
-/**
- * Default gas limit for receiving messages on the target chain
- * Based on successful test runs for simple message delivery:
- * - VAA verification and replay protection
- * - String decoding and event emission
- */
-export const DEFAULT_GAS_LIMIT = 171948n;
-
-/**
- * Default msg.value for relay instructions (no native token forwarding)
- */
-export const DEFAULT_MSG_VALUE = 0n;

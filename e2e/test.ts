@@ -2,12 +2,12 @@
  * E2E test for cross-chain price feed using Wormhole Executor
  */
 
-import { config, validateConfig } from './config.js';
+import { config, validateConfig } from '../config';
 import {
     sendPriceUpdate,
     waitForPriceUpdateReceipt,
     queryPrice,
-} from './messaging.js';
+} from './utils';
 
 async function main() {
     console.log('\n🚀 Cross-Chain Price Feed E2E Test');

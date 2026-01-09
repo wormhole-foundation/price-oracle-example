@@ -1,133 +1,40 @@
-# HelloWormhole End-to-End Testing
+# Cross-Chain Price Feed E2E Testing
 
-This directory contains a complete end-to-end test suite for the HelloWormhole cross-chain messaging integration using the **Wormhole Executor** service. The test demonstrates real cross-chain message delivery between Sepolia and Base Sepolia testnets using the Wormhole TypeScript SDK.
+This directory contains end-to-end tests for the cross-chain price feed integration using the **Wormhole Executor** service. The test demonstrates real cross-chain price updates from Sepolia to Base Sepolia and Polygon Amoy testnets using the Wormhole TypeScript SDK.
 
-## Table of Contents
+## Project Structure
 
--   [What This Does](#what-this-does)
--   [How It Works](#how-it-works)
--   [Setup](#setup)
--   [Running Tests](#running-tests)
--   [Code Structure](#code-structure)
--   [Resources](#resources)
+```
+├── .env                 # Environment variables (at project root)
+├── .env.example         # Example environment file
+├── config/              # Chain configuration
+│   ├── index.ts         # Chain configs and validation
+│   └── types.ts         # Type definitions
+├── ts-lib/              # Shared library (no logging - reusable for frontend)
+│   ├── index.ts         # Re-exports all utilities
+│   ├── address.ts       # Address conversion utilities
+│   ├── relay.ts         # Relay instructions encoding
+│   ├── executor.ts      # Executor API client
+│   ├── wormhole.ts      # SDK utilities
+│   └── messaging.ts     # Cross-chain messaging functions
+└── e2e/                 # E2E tests with logging
+    ├── test.ts          # Main test file
+    ├── utils.ts         # Test utilities with console output
+    └── abi/             # Contract ABIs
+```
 
 ## What This Does
 
 This test suite:
 
-1. **Requests a delivery quote** from the Wormhole Executor using the TypeScript SDK
-2. **Sends a cross-chain message** from Sepolia to Base Sepolia with automatic relay
-3. **Tracks the VAA** (Verifiable Action Approval) as it's signed by Wormhole Guardians
-4. **Waits for automatic delivery** by the Executor service
-5. **Verifies message receipt** on the target chain
-
-The Executor automatically relays your message after Guardians sign it—you don't need to manually submit the VAA to the target chain.
-
-## How It Works
-
-### 1. Request Executor Quote
-
-The test starts by creating relay instructions and requesting a quote:
-
-```typescript
-// Create relay instructions (VAAv1 format)
-const relayInstructions = createRelayInstructions(
-    DEFAULT_GAS_LIMIT, // 171948n - gas for target chain execution
-    DEFAULT_MSG_VALUE // 0n - no native token forwarding
-);
-// Result: 0x0100000000000000000000000000029fac00000000000000000000000000000000
-
-// Request quote from Executor
-const quote = await getExecutorQuote({
-    srcChain: 10002, // Sepolia chain ID
-    dstChain: 10004, // Base Sepolia chain ID
-    relayInstructions, // Encoded instructions
-});
-```
-
-**What the Executor returns:**
-
--   `signedQuote` - Cryptographically signed quote string to pass to contract
--   `estimatedCost` - Cost in source chain native tokens (wei) for delivery
-
-### 2. Calculate Total Cost
-
-The transaction must pay both the Wormhole messaging fee and the Executor delivery fee:
-
-```typescript
-const wormholeFee = await coreBridge.quoteEVMDeliveryPrice(
-    targetChainId,
-    0, // receiverValue
-    gasLimit
-);
-
-const totalCost = wormholeFee + BigInt(quote.estimatedCost);
-```
-
-**Critical:** The `estimatedCost` from the quote must be paid exactly, or the Executor will reject the delivery as "underpaid".
-
-### 3. Send Message with Executor
-
-```typescript
-const tx = await contract.sendGreeting(
-    'Hello from Sepolia!',
-    targetChainId,
-    gasLimit,
-    quote.signedQuote,
-    { value: totalCost } // MUST match Wormhole fee + Executor estimate
-);
-```
-
-This calls `_publishAndRelay()` in your contract, which:
-
-1. Publishes the message to Wormhole Core (emits VAA)
-2. Requests execution from Executor with the signed quote
-3. Pays the Executor for delivery
-
-### 4. VAA Signing
-
-Wormhole Guardians observe the transaction and sign the VAA:
-
--   19 Guardian nodes independently observe the event
--   Each Guardian signs the VAA
--   VAA becomes valid when 13+ signatures are collected
--   Process typically takes 1-2 minutes on testnets
-
-### 5. Automatic Relay
-
-The Executor service automatically:
-
-1. Monitors for `RequestForExecution` events with its signed quotes
-2. Waits for VAA finality (19/19 Guardian signatures)
-3. Fetches the signed VAA from the Guardian network
-4. Calls `receiveMessage()` on the target Executor contract
-5. Executor contract calls your `executeVAAv1()` function
-6. Your `_executeVaa()` is invoked with the message payload
-
-**The gas you specified in relay instructions is provided by the Executor!**
-
-### 6. Message Receipt
-
-On the target chain, your contract's `_executeVaa()` is called:
-
-```solidity
-function _executeVaa(
-    bytes calldata payload,
-    bytes32 peerAddress,
-    uint16 peerChain
-) internal override {
-    string memory greeting = string(payload);
-    emit GreetingReceived(greeting, peerChain, peerAddress);
-}
-```
-
-The test polls for this `GreetingReceived` event to confirm delivery.
+1. **Requests delivery quotes** from the Wormhole Executor for multiple destination chains
+2. **Sends a multi-chain price update** from Sepolia to Base Sepolia and Polygon Amoy
+3. **Tracks automatic delivery** by the Executor service
+4. **Verifies price receipt** on both target chains
 
 ## Setup
 
 ### 1. Install Dependencies
-
-From the project root:
 
 ```bash
 npm install
@@ -135,227 +42,108 @@ npm install
 
 ### 2. Deploy Contracts
 
-Deploy HelloWormhole to both Sepolia and Base Sepolia using Foundry:
+Deploy PriceFeedSender to Sepolia and PriceFeedReceiver to target chains:
 
 ```bash
-# Deploy to Sepolia
-forge script script/HelloWormhole.s.sol:HelloWormholeScript \
-  --rpc-url $SEPOLIA_RPC_URL \
-  --private-key $PRIVATE_KEY \
-  --broadcast --verify --etherscan-api-key $ETHERSCAN_API_KEY
+# Deploy sender to Sepolia
+forge script script/DeployPriceFeedSender.s.sol:DeployPriceFeedSender \
+  --rpc-url $SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast
 
-# Deploy to Base Sepolia
-forge script script/HelloWormhole.s.sol:HelloWormholeScript \
-  --rpc-url $BASE_SEPOLIA_RPC_URL \
-  --private-key $PRIVATE_KEY \
-  --broadcast --verify --etherscan-api-key $BASESCAN_API_KEY
+# Deploy receiver to Base Sepolia
+forge script script/DeployPriceFeedReceiver.s.sol:DeployPriceFeedReceiver \
+  --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast
+
+# Deploy receiver to Polygon Amoy
+forge script script/DeployPriceFeedReceiver.s.sol:DeployPriceFeedReceiver \
+  --rpc-url $POLYGON_AMOY_RPC_URL --private-key $PRIVATE_KEY --broadcast
 ```
 
 ### 3. Configure Environment
 
-Copy the example environment file:
+Copy the example environment file to the project root:
 
 ```bash
-cp e2e/.env.example .env
+cp .env.example .env
 ```
 
-Edit `.env` and provide:
+Edit `.env`:
 
 ```env
-# Private keys (must have testnet ETH on both chains)
+# Private keys (must have testnet ETH on all chains)
 PRIVATE_KEY_SEPOLIA=0x...
 PRIVATE_KEY_BASE_SEPOLIA=0x...
+PRIVATE_KEY_POLYGON_AMOY=0x...
 
-# Deployed HelloWormhole contract addresses
-HELLO_WORMHOLE_SEPOLIA=0x...
-HELLO_WORMHOLE_BASE_SEPOLIA=0x...
-
-# Wormhole chain IDs (these are standard)
-CHAIN_ID_SEPOLIA=10002
-CHAIN_ID_BASE_SEPOLIA=10004
+# Deployed contract addresses
+PRICE_FEED_SEPOLIA=0x...
+PRICE_FEED_BASE_SEPOLIA=0x...
+PRICE_FEED_POLYGON_AMOY=0x...
 ```
 
-**Optional overrides:**
+### 4. Setup Peers
 
-```env
-# Use custom RPC URLs instead of SDK defaults
-SEPOLIA_RPC_URL=https://your-rpc.com
-BASE_SEPOLIA_RPC_URL=https://your-rpc.com
-```
-
-### 4. Register Cross-Chain Peers
-
-Each contract must recognize the other as a valid peer:
+Register contracts as valid peers on each chain:
 
 ```bash
-# Set environment variables
-export PRIVATE_KEY=0x...
-export HELLO_WORMHOLE_SEPOLIA=0x8f6E15d9A4d0abCe4814c7d86D5B741A91bDCC04
-export HELLO_WORMHOLE_BASE_SEPOLIA=0xdF781F7473a1A7C20C1e5fC5f427Fa712dafB698
-
-# Register Base Sepolia as peer on Sepolia
 forge script script/SetupPeers.s.sol:SetupPeersScript \
-  --rpc-url https://ethereum-sepolia.publicnode.com \
-  --private-key $PRIVATE_KEY \
-  --broadcast -vv
+  --rpc-url $SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast
 
-# Register Sepolia as peer on Base Sepolia
 forge script script/SetupPeers.s.sol:SetupPeersScript \
-  --rpc-url https://base-sepolia-rpc.publicnode.com \
-  --private-key $PRIVATE_KEY \
-  --broadcast -vv
+  --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast
+
+forge script script/SetupPeers.s.sol:SetupPeersScript \
+  --rpc-url $POLYGON_AMOY_RPC_URL --private-key $PRIVATE_KEY --broadcast
 ```
 
 ## Running Tests
-
-Run the end-to-end test:
 
 ```bash
 npm run e2e:test
 ```
 
-### What Happens
-
-The test executes the following flow:
+### Test Flow
 
 ```
-1. ┌─────────────────────────────────────────┐
-   │ Request Quote from Executor             │
-   │ - Create relay instructions             │
-   │ - Call SDK's fetchQuote()               │
-   └─────────────────────────────────────────┘
-                    ↓
-2. ┌─────────────────────────────────────────┐
-   │ Send Greeting (Sepolia)                 │
-   │ - Calculate total cost                  │
-   │ - Call sendGreeting() with signedQuote  │
-   │ - Pay Wormhole fee + Executor estimate  │
-   └─────────────────────────────────────────┘
-                    ↓
-3. ┌─────────────────────────────────────────┐
-   │ Track VAA on Wormhole Scan              │
-   │ - Poll for VAA by tx hash               │
-   │ - Wait for Guardian signatures          │
-   └─────────────────────────────────────────┘
-                    ↓
-4. ┌─────────────────────────────────────────┐
-   │ Executor Automatically Relays           │
-   │ - Fetches signed VAA                    │
-   │ - Calls executeVAAv1() on Base Sepolia  │
-   └─────────────────────────────────────────┘
-                    ↓
-5. ┌─────────────────────────────────────────┐
-   │ Verify Receipt (Base Sepolia)           │
-   │ - Poll for GreetingReceived event       │
-   │ - Confirm message delivered             │
-   └─────────────────────────────────────────┘
+1. Request quotes from Executor for Base Sepolia + Polygon Amoy
+2. Send price update from Sepolia (bitcoin: $50,000, ethereum: $3,000)
+3. Wait for Executor to relay to both chains (1-3 min)
+4. Verify prices received on Base Sepolia
+5. Verify prices received on Polygon Amoy
 ```
 
-## Code Structure
+## Using the Shared Library
 
-### Relay Instructions Encoding (`relay.ts`)
-
-Relay instructions specify how the Executor should deliver your message:
+The `ts-lib/` folder contains utilities that can be used in any TypeScript project (including frontend):
 
 ```typescript
-export function createRelayInstructions(
-    gasLimit: bigint,
-    msgValue: bigint
-): string {
-    // VAAv1 format: version (1 byte) + gasLimit (16 bytes) + msgValue (16 bytes)
-    const version = '01';
-    const gas = gasLimit.toString(16).padStart(32, '0');
-    const value = msgValue.toString(16).padStart(32, '0');
-    return `0x${version}${gas}${value}`;
-}
-```
+import {
+    sendPriceUpdate,
+    queryPrice,
+    estimatePriceUpdateCost,
+    toUniversalAddress,
+    fromUniversalAddress,
+} from '../ts-lib/index.js';
 
-**Format breakdown:**
+// Estimate cost before sending
+const { totalCost, breakdown } = await estimatePriceUpdateCost(config.sepolia, [
+    config.baseSepolia,
+    config.polygonAmoy,
+]);
 
--   `0x01` - Version byte (VAAv1 format)
--   `00000000000000000000000000029fac` - Gas limit (171948 in hex, as uint128)
--   `00000000000000000000000000000000` - Msg value (0, as uint128)
+// Send price update
+const result = await sendPriceUpdate(
+    config.sepolia,
+    [config.baseSepolia],
+    ['bitcoin', 'ethereum'],
+    [50000n * 10n ** 8n, 3000n * 10n ** 8n]
+);
 
-### Executor API Client (`executor.ts`)
-
-Wraps the SDK's Executor API functions:
-
-```typescript
-export async function getExecutorQuote(
-    params: ExecutorQuoteParams
-): Promise<ExecutorQuote> {
-    const apiUrl = executor.executorAPI('Testnet');
-
-    // Use SDK's fetchQuote function
-    const response = await fetchQuote(
-        apiUrl,
-        params.srcChain,
-        params.dstChain,
-        params.relayInstructions
-    );
-
-    // SDK returns both signedQuote AND estimatedCost
-    return {
-        signedQuote: response.signedQuote,
-        estimatedCost: response.estimatedCost,
-    };
-}
-```
-
-**Key points:**
-
--   Uses SDK's `fetchQuote()` exclusively
--   Extracts `estimatedCost` from response (critical for payment)
--   Returns structured quote object
-
-### Message Sending (`messaging.ts`)
-
-Orchestrates the quote → transaction flow:
-
-```typescript
-export async function sendGreeting(
-    fromConfig: ChainConfig,
-    toConfig: ChainConfig,
-    greeting: string
-): Promise<SendGreetingResult> {
-    // 1. Create relay instructions
-    const relayInstructions = createRelayInstructions(
-        DEFAULT_GAS_LIMIT,
-        DEFAULT_MSG_VALUE
-    );
-
-    // 2. Get quote from Executor
-    const quote = await getExecutorQuote({
-        srcChain: fromConfig.chainId,
-        dstChain: toConfig.chainId,
-        relayInstructions,
-    });
-
-    // 3. Calculate total cost
-    const totalCost = await calculateTotalCost(
-        contract,
-        toConfig.chainId,
-        DEFAULT_GAS_LIMIT,
-        quote.estimatedCost
-    );
-
-    // 4. Send transaction
-    const tx = await contract.sendGreeting(
-        greeting,
-        toConfig.chainId,
-        DEFAULT_GAS_LIMIT,
-        quote.signedQuote,
-        { value: totalCost }
-    );
-
-    return { receipt, sequence };
-}
+// Query price from any chain
+const price = await queryPrice(config.baseSepolia, 'bitcoin');
 ```
 
 ## Resources
 
 -   [Wormhole Documentation](https://docs.wormhole.com/)
--   [Executor Tutorial](https://docs.wormhole.com/wormhole/quick-start/tutorials/hello-wormhole)
--   [Example Messaging Executor](https://github.com/wormholelabs-xyz/example-messaging-executor)
 -   [Wormhole TypeScript SDK](https://github.com/wormhole-foundation/wormhole-sdk-ts)
 -   [Wormhole Scan (Testnet)](https://wormholescan.io/#/?network=Testnet)

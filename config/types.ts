@@ -1,5 +1,5 @@
 /**
- * Type definitions for Wormhole Executor integration
+ * Type definitions for Wormhole cross-chain integration
  */
 
 import type { Network, Chain } from '@wormhole-foundation/sdk-base';
@@ -22,7 +22,7 @@ export interface ExecutorQuoteParams {
 
 export interface ExecutorQuote {
     signedQuote: string;
-    estimatedCost?: string;
+    estimatedCost: bigint;
 }
 
 export interface ExecutorCapabilities {
@@ -40,4 +40,11 @@ export interface SendPriceUpdateResult {
 export interface VAAData {
     vaa: string;
     timestamp: string;
+}
+
+export interface TargetChainParams {
+    chainId: number;
+    gasLimit: bigint;
+    totalCost: bigint;
+    signedQuote: string;
 }
