@@ -5,10 +5,13 @@
     "type": "module",
     "scripts": {
         "e2e:test": "tsx e2e/test.ts",
+        "e2e:playwright": "cd app && pnpm test",
         "typecheck": "tsc --noEmit",
         "test": "forge test",
         "build": "forge build",
-        "build:ts": "tsc"
+        "build:ts": "tsc",
+        "dev": "cd app && pnpm dev",
+        "start": "cd app && pnpm start"
     },
     "keywords": [
         "wormhole",
@@ -26,7 +29,7 @@
         "@wormhole-foundation/sdk-definitions": "^3.9.0",
         "@wormhole-foundation/sdk-evm": "^3.9.0",
         "dotenv": "^16.4.5",
-        "ethers": "^6.13.0"
+        "viem": "^2.44.0"
     },
     "devDependencies": {
         "@types/node": "^22.19.3",

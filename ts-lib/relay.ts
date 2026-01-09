@@ -2,18 +2,8 @@
  * Relay instructions utilities for Wormhole Executor
  */
 
-/**
- * Default gas limit for receiving messages on the target chain
- * Based on successful test runs for simple message delivery:
- * - VAA verification and replay protection
- * - String decoding and event emission
- */
-export const DEFAULT_GAS_LIMIT = 171948n;
-
-/**
- * Default msg.value for relay instructions (no native token forwarding)
- */
-export const DEFAULT_MSG_VALUE = 0n;
+// Import constants from centralized config
+export { DEFAULT_GAS_LIMIT, DEFAULT_MSG_VALUE } from '../config/relay';
 
 /**
  * Create relay instructions for the Executor quote request

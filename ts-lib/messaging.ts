@@ -2,13 +2,24 @@
  * Cross-chain messaging functions for PriceFeed
  */
 
-import { ethers } from 'ethers';
+import {
+    type PublicClient,
+    type WalletClient,
+    type Address,
+    getContract,
+    decodeEventLog,
+} from 'viem';
 import type {
     ChainConfig,
     SendPriceUpdateResult,
     TargetChainParams,
 } from '../config/types';
-import { getProviderAndWallet, getCoreBridgeAddress } from './wormhole';
+import {
+    PriceFeedSenderABI,
+    PriceFeedReceiverABI,
+    CoreBridgeABI,
+} from '../config/abi';
+import { getClients, getCoreBridgeAddress } from './wormhole';
 import { getMultiChainQuotes, calculateTotalCost } from './executor';
 import {
     createRelayInstructions,
@@ -16,39 +27,26 @@ import {
     DEFAULT_MSG_VALUE,
 } from './relay';
 
-/**
- * ABI for PriceFeedSender contract
- */
-const PRICE_FEED_SENDER_ABI = [
-    'function updatePrices(string[] calldata tokenNames, uint256[] calldata prices, tuple(uint16 chainId, uint128 gasLimit, uint256 totalCost, bytes signedQuote)[] calldata targets) external payable returns (uint64[] memory sequences)',
-    'function prices(string) view returns (uint256)',
-    'event PricesUpdated(uint256 count, uint16 targetChain, uint64 sequence)',
-    'event LocalPricesStored(string[] tokenNames, uint256[] prices)',
-];
+// Re-export ABIs for convenience
+export { PriceFeedSenderABI, PriceFeedReceiverABI, CoreBridgeABI };
 
 /**
- * ABI for PriceFeedReceiver contract
- */
-const PRICE_FEED_RECEIVER_ABI = [
-    'function prices(string) view returns (uint256)',
-    'event PricesReceived(uint256 count, uint16 senderChain, bytes32 sender)',
-];
-
-/**
- * CoreBridge ABI for message fee
- */
-const CORE_BRIDGE_ABI = ['function messageFee() view returns (uint256)'];
-
-/**
- * Get a PriceFeed contract instance
+ * Get a PriceFeed contract instance (viem getContract pattern)
  */
 export function getPriceFeedContract(
-    address: string,
-    signerOrProvider: ethers.Wallet | ethers.Provider,
+    address: Address,
+    publicClient: PublicClient,
+    walletClient?: WalletClient,
     isSender: boolean = true
 ) {
-    const abi = isSender ? PRICE_FEED_SENDER_ABI : PRICE_FEED_RECEIVER_ABI;
-    return new ethers.Contract(address, abi, signerOrProvider);
+    const abi = isSender ? PriceFeedSenderABI : PriceFeedReceiverABI;
+    return getContract({
+        address,
+        abi,
+        client: walletClient
+            ? { public: publicClient, wallet: walletClient }
+            : publicClient,
+    });
 }
 
 /**
@@ -63,12 +61,7 @@ export async function sendPriceUpdate(
     symbols: string[],
     prices: bigint[]
 ): Promise<SendPriceUpdateResult> {
-    const { provider, wallet } = await getProviderAndWallet(fromConfig);
-    const contract = getPriceFeedContract(
-        fromConfig.priceFeedAddress,
-        wallet,
-        true
-    );
+    const { publicClient, walletClient } = await getClients(fromConfig);
 
     // Build relay instructions
     const gasLimit = DEFAULT_GAS_LIMIT * 2n;
@@ -84,23 +77,16 @@ export async function sendPriceUpdate(
         }))
     );
 
-    // Calculate total cost
-    const coreBridgeAddress = await getCoreBridgeAddress(fromConfig);
-    const coreBridge = new ethers.Contract(
-        coreBridgeAddress,
-        CORE_BRIDGE_ABI,
-        provider
-    );
-
-    const messageFee = await coreBridge.messageFee();
-    let totalExecutorCost = 0n;
+    // Calculate total cost - contract expects exact sum of target costs (no message fee)
+    let totalCost = 0n;
     for (const quote of quotes) {
-        totalExecutorCost += quote.estimatedCost;
+        totalCost += quote.estimatedCost;
     }
-    const totalCost = calculateTotalCost(messageFee, totalExecutorCost);
 
     // Check balance
-    const balance = await provider.getBalance(wallet.address);
+    const balance = await publicClient.getBalance({
+        address: walletClient.account!.address,
+    });
     if (balance < totalCost) {
         throw new Error('Insufficient balance for transaction');
     }
@@ -115,35 +101,38 @@ export async function sendPriceUpdate(
         })
     );
 
-    // Send transaction
-    const tx = await contract.updatePrices(symbols, prices, targetChainParams, {
+    // Send transaction using writeContract directly (skip simulate for complex struct arrays)
+    const hash = await walletClient.writeContract({
+        address: fromConfig.priceFeedAddress,
+        abi: PriceFeedSenderABI,
+        functionName: 'updatePrices',
+        args: [symbols, prices, targetChainParams],
         value: totalCost,
+        chain: walletClient.chain,
+        account: walletClient.account!,
     });
 
-    const receipt = await tx.wait();
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
     // Parse sequence from event
     let sequence: bigint | undefined;
-    if (receipt) {
-        const sentEvent = receipt.logs
-            .map((log: any) => {
-                try {
-                    return contract.interface.parseLog({
-                        topics: log.topics as string[],
-                        data: log.data,
-                    });
-                } catch {
-                    return null;
-                }
-            })
-            .find((event: any) => event?.name === 'PricesUpdated');
-
-        if (sentEvent) {
-            sequence = sentEvent.args.sequence;
+    for (const log of receipt.logs) {
+        try {
+            const event = decodeEventLog({
+                abi: PriceFeedSenderABI,
+                data: log.data,
+                topics: log.topics,
+            });
+            if (event.eventName === 'PricesUpdated') {
+                sequence = (event.args as any).sequence;
+                break;
+            }
+        } catch {
+            // Not our event, continue
         }
     }
 
-    return { receipt, sequence };
+    return { receipt, hash, sequence };
 }
 
 /**
@@ -153,16 +142,16 @@ export async function queryPrice(
     chainConfig: ChainConfig,
     symbol: string
 ): Promise<bigint | null> {
-    const { provider } = await getProviderAndWallet(chainConfig);
-    const contract = getPriceFeedContract(
-        chainConfig.priceFeedAddress,
-        provider,
-        false
-    );
+    const { publicClient } = await getClients(chainConfig);
 
     try {
-        const price = await contract.prices(symbol);
-        return price;
+        const price = await publicClient.readContract({
+            address: chainConfig.priceFeedAddress,
+            abi: PriceFeedReceiverABI,
+            functionName: 'prices',
+            args: [symbol],
+        });
+        return price as bigint;
     } catch (error) {
         return null;
     }
@@ -178,8 +167,6 @@ export async function estimatePriceUpdateCost(
     totalCost: bigint;
     breakdown: { chain: string; cost: bigint }[];
 }> {
-    const { provider } = await getProviderAndWallet(fromConfig);
-
     const gasLimit = DEFAULT_GAS_LIMIT * 2n;
     const msgValue = DEFAULT_MSG_VALUE;
     const relayInstructions = createRelayInstructions(gasLimit, msgValue);
@@ -192,19 +179,11 @@ export async function estimatePriceUpdateCost(
         }))
     );
 
-    const coreBridgeAddress = await getCoreBridgeAddress(fromConfig);
-    const coreBridge = new ethers.Contract(
-        coreBridgeAddress,
-        CORE_BRIDGE_ABI,
-        provider
-    );
-
-    const messageFee = await coreBridge.messageFee();
-    let totalExecutorCost = 0n;
+    let totalCost = 0n;
     const breakdown: { chain: string; cost: bigint }[] = [];
 
     for (let i = 0; i < quotes.length; i++) {
-        totalExecutorCost += quotes[i].estimatedCost;
+        totalCost += quotes[i].estimatedCost;
         breakdown.push({
             chain: toConfigs[i].chain,
             cost: quotes[i].estimatedCost,
@@ -212,7 +191,7 @@ export async function estimatePriceUpdateCost(
     }
 
     return {
-        totalCost: calculateTotalCost(messageFee, totalExecutorCost),
+        totalCost,
         breakdown,
     };
 }

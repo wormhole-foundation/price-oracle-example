@@ -2,10 +2,30 @@
  * Wormhole SDK utilities and chain context helpers
  */
 
-import { ethers } from 'ethers';
+import {
+    createPublicClient,
+    createWalletClient,
+    http,
+    type PublicClient,
+    type WalletClient,
+    type Chain as ViemChain,
+    type Address,
+    type Log,
+} from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { sepolia, baseSepolia, polygonAmoy } from 'viem/chains';
 import { Wormhole } from '@wormhole-foundation/sdk';
 import { EvmPlatform } from '@wormhole-foundation/sdk-evm';
 import type { ChainConfig } from '../config/types';
+
+/**
+ * Map chain names to viem chain configs
+ */
+const chainMap: Record<string, ViemChain> = {
+    Sepolia: sepolia,
+    BaseSepolia: baseSepolia,
+    PolygonSepolia: polygonAmoy,
+};
 
 /**
  * Get Wormhole SDK context with CoreBridge addresses
@@ -18,10 +38,22 @@ export async function getWormholeContext(chainConfig: ChainConfig) {
 }
 
 /**
- * Get provider and wallet for a chain
- * Uses SDK's default RPC if not provided in config
+ * Get viem chain config from ChainConfig
  */
-export async function getProviderAndWallet(chainConfig: ChainConfig) {
+export function getViemChain(chainConfig: ChainConfig): ViemChain {
+    const chain = chainMap[chainConfig.chain];
+    if (!chain) {
+        throw new Error(`Unsupported chain: ${chainConfig.chain}`);
+    }
+    return chain;
+}
+
+/**
+ * Get public client for reading from chain
+ */
+export async function getPublicClient(
+    chainConfig: ChainConfig
+): Promise<PublicClient> {
     let rpcUrl = chainConfig.rpcUrl;
 
     if (!rpcUrl) {
@@ -30,10 +62,46 @@ export async function getProviderAndWallet(chainConfig: ChainConfig) {
         rpcUrl = Array.isArray(rpcConfig) ? rpcConfig[0] : rpcConfig;
     }
 
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const wallet = new ethers.Wallet(chainConfig.privateKey, provider);
+    const chain = getViemChain(chainConfig);
 
-    return { provider, wallet };
+    return createPublicClient({
+        chain,
+        transport: http(rpcUrl),
+    });
+}
+
+/**
+ * Get wallet client for signing transactions
+ */
+export async function getWalletClient(
+    chainConfig: ChainConfig
+): Promise<WalletClient> {
+    let rpcUrl = chainConfig.rpcUrl;
+
+    if (!rpcUrl) {
+        const { chainContext } = await getWormholeContext(chainConfig);
+        const rpcConfig = chainContext.config.rpc;
+        rpcUrl = Array.isArray(rpcConfig) ? rpcConfig[0] : rpcConfig;
+    }
+
+    const chain = getViemChain(chainConfig);
+    const account = privateKeyToAccount(chainConfig.privateKey);
+
+    return createWalletClient({
+        account,
+        chain,
+        transport: http(rpcUrl),
+    });
+}
+
+/**
+ * Get both public and wallet clients
+ */
+export async function getClients(chainConfig: ChainConfig) {
+    const publicClient = await getPublicClient(chainConfig);
+    const walletClient = await getWalletClient(chainConfig);
+
+    return { publicClient, walletClient };
 }
 
 /**
@@ -41,7 +109,7 @@ export async function getProviderAndWallet(chainConfig: ChainConfig) {
  */
 export async function getCoreBridgeAddress(
     chainConfig: ChainConfig
-): Promise<string> {
+): Promise<Address> {
     const { chainContext } = await getWormholeContext(chainConfig);
     const contracts = chainContext.config.contracts;
 
@@ -51,7 +119,7 @@ export async function getCoreBridgeAddress(
         );
     }
 
-    return contracts.coreBridge;
+    return contracts.coreBridge as Address;
 }
 
 /**
@@ -66,22 +134,24 @@ export function sleep(ms: number): Promise<void> {
  * Returns the event if found, null otherwise
  */
 export async function pollForEvent(
-    contract: ethers.Contract,
-    filter: any,
+    publicClient: PublicClient,
+    address: Address,
+    event: any,
+    fromBlock: bigint,
     timeoutMs: number = 60000
-): Promise<ethers.EventLog | null> {
+): Promise<Log | null> {
     const startTime = Date.now();
-    const provider = contract.runner?.provider;
-    if (!provider) throw new Error('No provider available');
-
-    const currentBlock = await provider.getBlockNumber();
-    const fromBlock = Math.max(0, currentBlock - 1000);
 
     while (Date.now() - startTime < timeoutMs) {
-        const events = await contract.queryFilter(filter, fromBlock);
+        const logs = await publicClient.getLogs({
+            address,
+            event,
+            fromBlock,
+            toBlock: 'latest',
+        });
 
-        if (events.length > 0) {
-            return events[0] as ethers.EventLog;
+        if (logs.length > 0) {
+            return logs[0];
         }
 
         await sleep(2000);

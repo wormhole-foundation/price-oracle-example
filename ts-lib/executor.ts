@@ -11,6 +11,20 @@ import type {
 } from '../config/types';
 
 /**
+ * Calculate total cost including message fee
+ * Accepts either a single bigint or array of executor costs
+ */
+export function calculateTotalCost(
+    messageFee: bigint,
+    executorCost: bigint | bigint[]
+): bigint {
+    const totalExecutorCost = Array.isArray(executorCost)
+        ? executorCost.reduce((sum, cost) => sum + cost, BigInt(0))
+        : executorCost;
+    return messageFee + totalExecutorCost;
+}
+
+/**
  * Get the Executor API URL for the given network from the SDK
  * Source: https://github.com/wormhole-foundation/wormhole-sdk-ts/blob/main/core/base/src/constants/executor.ts
  */
@@ -174,19 +188,4 @@ export async function pollForExecutorStatus(
             message: 'Executor did not process transaction within timeout',
         },
     ];
-}
-
-/**
- * Calculate total cost for sending a message
- * Includes both Wormhole message fee and Executor relay fee
- */
-export function calculateTotalCost(
-    wormholeMessageFee: bigint,
-    executorEstimatedCost: bigint | string = 0n
-): bigint {
-    const executorCost =
-        typeof executorEstimatedCost === 'string'
-            ? BigInt(executorEstimatedCost)
-            : executorEstimatedCost;
-    return wormholeMessageFee + executorCost;
 }

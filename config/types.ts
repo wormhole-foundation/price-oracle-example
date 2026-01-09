@@ -3,14 +3,14 @@
  */
 
 import type { Network, Chain } from '@wormhole-foundation/sdk-base';
-import type { ethers } from 'ethers';
+import type { Hash, TransactionReceipt, Address, Hex } from 'viem';
 
 export interface ChainConfig {
     chain: Chain;
     network: Network;
     rpcUrl?: string;
-    privateKey: string;
-    priceFeedAddress: string;
+    privateKey: Hex;
+    priceFeedAddress: Address;
     wormholeChainId: number;
 }
 
@@ -21,7 +21,7 @@ export interface ExecutorQuoteParams {
 }
 
 export interface ExecutorQuote {
-    signedQuote: string;
+    signedQuote: Hex;
     estimatedCost: bigint;
 }
 
@@ -33,7 +33,8 @@ export interface ExecutorCapabilities {
 }
 
 export interface SendPriceUpdateResult {
-    receipt: ethers.TransactionReceipt | null;
+    receipt: TransactionReceipt | null;
+    hash: Hash | undefined;
     sequence: bigint | undefined;
 }
 
@@ -46,5 +47,5 @@ export interface TargetChainParams {
     chainId: number;
     gasLimit: bigint;
     totalCost: bigint;
-    signedQuote: string;
+    signedQuote: Hex;
 }

@@ -4,15 +4,14 @@ Cross-chain price oracle using Wormhole Executor. Broadcast token prices to mult
 
 ## Features
 
-✅ Multi-chain broadcasting (1 transaction → N chains)  
-✅ Array-based price updates  
-✅ Role-based access control  
-✅ Peer validation & replay protection
+-   Multi-chain broadcasting (1 tx → N chains)
+-   Role-based access control
+-   Peer validation & replay protection
 
 ## Quick Start
 
 ```bash
-forge install && npm install
+forge install && pnpm install
 forge test
 
 # Deploy contracts
@@ -108,7 +107,6 @@ flowchart LR
 **PriceFeedSender** - Broadcasts to multiple chains in one transaction  
 **PriceFeedReceiver** - Validates peer, stores prices, emits events
 
-
 ## Setup Peers
 
 Use the SetupPeers script to configure peer relationships:
@@ -161,3 +159,27 @@ await sendPriceUpdate(
 -   [Wormhole Docs](https://wormhole.com/docs)
 -   [Solidity SDK](https://github.com/wormhole-foundation/wormhole-solidity-sdk)
 -   [Executor Explorer](https://wormholelabs-xyz.github.io/executor-explorer)
+
+## Frontend
+
+The project includes a Next.js frontend for interacting with the price oracle contracts.
+
+### Running the Frontend
+
+```bash
+# Install dependencies
+cd app && pnpm install
+
+# Run development server (from root)
+pnpm dev
+
+# Run Playwright tests
+pnpm e2e:playwright
+```
+
+### Features
+
+-   Wallet connection (MetaMask, WalletConnect)
+-   Multi-chain price submission
+-   Real-time price tracking with auto-refresh
+-   Admin pause controls

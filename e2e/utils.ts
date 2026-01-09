@@ -3,34 +3,38 @@
  * Wraps shared library functions with console output for test visibility
  */
 
-import { ethers } from 'ethers';
+import { formatEther, decodeEventLog, type Hash } from 'viem';
 import type { ChainConfig, SendPriceUpdateResult } from '../config/types';
 import {
     queryPrice as libQueryPrice,
-    getProviderAndWallet,
-    getPriceFeedContract,
+    getClients,
+    getPublicClient,
     calculateTotalCost,
     getMultiChainQuotes,
     getCoreBridgeAddress,
     createRelayInstructions,
     DEFAULT_GAS_LIMIT,
     DEFAULT_MSG_VALUE,
+    PRICE_FEED_SENDER_ABI,
+    PRICE_FEED_RECEIVER_ABI,
+    CORE_BRIDGE_ABI,
 } from '../ts-lib';
 
 /**
  * Wait for transaction and log result
  */
 export async function waitForTx(
-    tx: ethers.ContractTransactionResponse,
+    publicClient: Awaited<ReturnType<typeof getPublicClient>>,
+    hash: Hash,
     description: string
 ) {
     console.log(`\n${description}`);
-    console.log(`Transaction hash: ${tx.hash}`);
+    console.log(`Transaction hash: ${hash}`);
     console.log('Waiting for confirmation...');
 
-    const receipt = await tx.wait();
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
-    if (receipt?.status === 1) {
+    if (receipt.status === 'success') {
         console.log('✅ Transaction confirmed!');
         console.log(`Block: ${receipt.blockNumber}`);
         console.log(`Gas used: ${receipt.gasUsed.toString()}`);
@@ -56,12 +60,7 @@ export async function sendPriceUpdate(
         } to ${toConfigs.map((c) => c.chain).join(', ')}`
     );
 
-    const { provider, wallet } = await getProviderAndWallet(fromConfig);
-    const contract = getPriceFeedContract(
-        fromConfig.priceFeedAddress,
-        wallet,
-        true
-    );
+    const { publicClient, walletClient } = await getClients(fromConfig);
 
     // Build relay instructions
     const gasLimit = DEFAULT_GAS_LIMIT * 2n;
@@ -79,23 +78,25 @@ export async function sendPriceUpdate(
 
     // Calculate total cost
     const coreBridgeAddress = await getCoreBridgeAddress(fromConfig);
-    const coreBridge = new ethers.Contract(
-        coreBridgeAddress,
-        ['function messageFee() view returns (uint256)'],
-        provider
-    );
 
-    const messageFee = await coreBridge.messageFee();
+    const messageFee = await publicClient.readContract({
+        address: coreBridgeAddress,
+        abi: CORE_BRIDGE_ABI,
+        functionName: 'messageFee',
+    });
+
     let totalExecutorCost = 0n;
     for (const quote of quotes) {
         totalExecutorCost += quote.estimatedCost;
     }
     const totalCost = calculateTotalCost(messageFee, totalExecutorCost);
 
-    console.log(`💰 Total cost: ${ethers.formatEther(totalCost)} ETH`);
+    console.log(`💰 Total cost: ${formatEther(totalCost)} ETH`);
 
     // Check balance
-    const balance = await provider.getBalance(wallet.address);
+    const balance = await publicClient.getBalance({
+        address: walletClient.account!.address,
+    });
     if (balance < totalCost) {
         throw new Error('Insufficient balance for transaction');
     }
@@ -108,36 +109,40 @@ export async function sendPriceUpdate(
         signedQuote: quotes[index].signedQuote,
     }));
 
-    // Send transaction
-    const tx = await contract.updatePrices(symbols, prices, targetChainParams, {
+    // Send transaction using simulateContract + writeContract pattern
+    const { request } = await publicClient.simulateContract({
+        address: fromConfig.priceFeedAddress,
+        abi: PRICE_FEED_SENDER_ABI,
+        functionName: 'updatePrices',
+        args: [symbols, prices, targetChainParams],
         value: totalCost,
+        account: walletClient.account!,
     });
 
-    const receipt = await waitForTx(tx, 'Price update');
+    const hash = await walletClient.writeContract(request);
+    const receipt = await waitForTx(publicClient, hash, 'Price update');
 
     // Parse sequence from event
     let sequence: bigint | undefined;
-    if (receipt) {
-        const sentEvent = receipt.logs
-            .map((log: any) => {
-                try {
-                    return contract.interface.parseLog({
-                        topics: log.topics as string[],
-                        data: log.data,
-                    });
-                } catch {
-                    return null;
-                }
-            })
-            .find((event: any) => event?.name === 'PricesUpdated');
-
-        if (sentEvent) {
-            console.log(`✅ Sent (sequence: ${sentEvent.args.sequence})`);
-            sequence = sentEvent.args.sequence;
+    for (const log of receipt.logs) {
+        try {
+            const event = decodeEventLog({
+                abi: PRICE_FEED_SENDER_ABI,
+                data: log.data,
+                topics: log.topics,
+            });
+            if (event.eventName === 'PricesUpdated') {
+                const args = event.args as any;
+                console.log(`✅ Sent (sequence: ${args.sequence})`);
+                sequence = args.sequence;
+                break;
+            }
+        } catch {
+            // Not our event, continue
         }
     }
 
-    return { receipt, sequence };
+    return { receipt, hash, sequence };
 }
 
 /**
@@ -149,36 +154,41 @@ export async function waitForPriceUpdateReceipt(
 ): Promise<boolean> {
     console.log(`⏳ Waiting for ${chainConfig.chain}...`);
 
-    const { wallet } = await getProviderAndWallet(chainConfig);
-    const contract = getPriceFeedContract(
-        chainConfig.priceFeedAddress,
-        wallet,
-        false
-    );
+    const publicClient = await getPublicClient(chainConfig);
 
-    const filter = contract.filters.PricesReceived();
-
-    // Poll with logging
-    const startTime = Date.now();
-    const timeoutMs = 120000;
-    const provider = contract.runner?.provider;
-    if (!provider) throw new Error('No provider available');
-
-    const currentBlock = await provider.getBlockNumber();
-    const fromBlock = Math.max(0, currentBlock - 1000);
+    // Get starting block
+    const currentBlock = await publicClient.getBlockNumber();
+    const fromBlock = currentBlock > 1000n ? currentBlock - 1000n : 0n;
 
     console.log(
         `\nPolling for PricesReceived event from block ${fromBlock}...`
     );
 
-    while (Date.now() - startTime < timeoutMs) {
-        const events = await contract.queryFilter(filter, fromBlock);
+    // Poll with logging
+    const startTime = Date.now();
+    const timeoutMs = 120000;
 
-        if (events.length > 0) {
-            const event = events[0] as ethers.EventLog;
+    while (Date.now() - startTime < timeoutMs) {
+        const logs = await publicClient.getLogs({
+            address: chainConfig.priceFeedAddress,
+            event: {
+                type: 'event',
+                name: 'PricesReceived',
+                inputs: [
+                    { type: 'uint256', name: 'count', indexed: false },
+                    { type: 'uint16', name: 'senderChain', indexed: false },
+                    { type: 'bytes32', name: 'sender', indexed: false },
+                ],
+            },
+            fromBlock,
+            toBlock: 'latest',
+        });
+
+        if (logs.length > 0) {
+            const log = logs[0];
             console.log(`✅ Found PricesReceived event!`);
             console.log(
-                `✅ ${chainConfig.chain} received (tx: ${event.transactionHash})`
+                `✅ ${chainConfig.chain} received (tx: ${log.transactionHash})`
             );
             return true;
         }
