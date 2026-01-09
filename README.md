@@ -108,11 +108,6 @@ flowchart LR
 **PriceFeedSender** - Broadcasts to multiple chains in one transaction  
 **PriceFeedReceiver** - Validates peer, stores prices, emits events
 
-| Chain        | Wormhole ID | CoreBridge      | Executor        |
-| ------------ | ----------- | --------------- | --------------- |
-| Sepolia      | 10002       | `0x4a8bc80E...` | `0xD0fb39f5...` |
-| Base Sepolia | 10004       | `0x79A1027a...` | `0x51B47D49...` |
-| Polygon Amoy | 10007       | `0x6b9C8671...` | `0x7056721C...` |
 
 ## Setup Peers
 
@@ -123,17 +118,7 @@ Use the SetupPeers script to configure peer relationships:
 forge script script/SetupPeers.s.sol:SetupPeersScript \
   --rpc-url https://ethereum-sepolia.publicnode.com \
   --private-key $PRIVATE_KEY_SEPOLIA --broadcast
-
-forge script script/SetupPeers.s.sol:SetupPeersScript \
-  --rpc-url https://sepolia.base.org \
-  --private-key $PRIVATE_KEY_BASE_SEPOLIA --broadcast
-
-forge script script/SetupPeers.s.sol:SetupPeersScript \
-  --rpc-url https://rpc-amoy.polygon.technology \
-  --private-key $PRIVATE_KEY_POLYGON_AMOY --broadcast --legacy
 ```
-
-**Note**: Script uses SDK's `toUniversalAddress()` for proper Wormhole Universal Address format.
 
 ## Usage
 
@@ -169,31 +154,6 @@ await sendPriceUpdate(
     ['bitcoin', 'ethereum'],
     [50000n * 10n ** 8n, 3000n * 10n ** 8n]
 );
-```
-
-Query prices on any chain:
-
-````bash
-cast call $PRICE_FEED_BASE_SEPOLIA "prices(string)" "bitcoin" --rpc-url https://sepolia.base.org
-```solidity
-// Multi-chain broadcast
-TargetChainParams[] memory targets = new TargetChainParams[](2);
-targets[0] = TargetChainParams(10004, 500000, 0.005 ether, quote1);
-targets[1] = TargetChainParams(10007, 500000, 0.005 ether, quote2);
-
-priceFeedSender.updatePrices{value: 0.01 ether}(
-    ["bitcoin", "ethereum"],
-    [50000e8, 3000e8],
-    targets
-);
-````
-
-```bash
-# Query prices
-cast call $RECEIVER "prices(string)" "bitcoin" --rpc-url $RPC
-
-# E2E test
-npm run e2e:test
 ```
 
 ## Resources
